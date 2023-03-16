@@ -40,7 +40,8 @@ test_name = "task_A_En_test.csv"
 
 
 #On défini les paramètres du dataloader
-params = {'batch_size': 1,
+batch_size = 2
+params = {'batch_size': batch_size,
           'shuffle': False,
           'num_workers': 1}
 
@@ -145,12 +146,15 @@ tokens = [tokenizer(doc) for doc in list(X_train)]
 
 voc = build_vocab_from_iterator(tokens)
 
-print(voc.__getitem__("the"))
-
-def my_one_hot(voc, keys: Union[str, Iterable]):
-    if isinstance(keys, str):
-        keys = [keys]
-    return F.one_hot(torch.tensor(voc(keys)), num_classes=len(voc))
+def one_hot_encoding(voc, list_Of_Words):
+    print("ok")
+    indices = voc.forward(list_Of_Words)
+    print("oK")
+    matrixToReturn = np.zeros([len(list_Of_Words),voc.__len__()])
+    print("Ok")
+    matrixToReturn[np.arange(len(list_Of_Words)),indices] = 1
+    print("OK")
+    return matrixToReturn
 
 # Paramètres de notre modèle
 taille_embeddings = 10
@@ -182,22 +186,22 @@ for epoch in range(n_epoch):
     for i, (batch, labels) in enumerate(training_generator):
         
         tokens = [tokenizer(doc) for doc in list(batch)]
-        print(tokens)
-        print(my_one_hot(voc,tokens))
         
-        # zero the parameter gradients
-        optimizer.zero_grad()
+        for number_batch in range(batch_size):
+
+            # zero the parameter gradients
+            optimizer.zero_grad()
+            
+            # forward + backward + optimize
+            outputs = model(torch.from_numpy(one_hot_encoding(voc,tokens[number_batch])))
+            loss = loss(outputs, labels)
+            loss.backward()
+            optimizer.step()
         
-        # forward + backward + optimize
-        outputs = model(my_one_hot(voc,tokens))
-        loss = loss(outputs, labels)
-        loss.backward()
-        optimizer.step()
-        
-        # print statistics
-        running_loss += loss.item()
-        if i % 2000 == 1999:    # print every 2000 mini-batches
-            print(f'[{epoch + 1}, {i + 1:5d}] loss: {running_loss / 2000:.3f}')
-            running_loss = 0.0
+            # print statistics
+            running_loss += loss.item()
+            if i % 2000 == 1999:    # print every 2000 mini-batches
+                print(f'[{epoch + 1}, {i + 1:5d}] loss: {running_loss / 2000:.3f}')
+                running_loss = 0.0
             
 #Entrainement terminé
