@@ -148,8 +148,8 @@ voc = build_vocab_from_iterator(tokens)
 
 def one_hot_encoding(voc, list_Of_Words):
     indices = voc.forward(list_Of_Words)
-    matrixToReturn = np.zeros([len(list_Of_Words),voc.__len__()])
-    matrixToReturn[np.arange(len(list_Of_Words)),indices] = 1
+    matrixToReturn = np.zeros([voc.__len__(),len(list_Of_Words)])
+    matrixToReturn[indices,np.arange(len(list_Of_Words))] = 1
     return matrixToReturn
 
 # Paramètres de notre modèle
@@ -182,29 +182,33 @@ for epoch in range(n_epoch):
     for i, (batch, labels) in enumerate(training_generator):
         
         tokens = [tokenizer(doc) for doc in list(batch)]
+        one_hot_matrix = np.array([])
 
         for number_batch in range(batch_size):
-            one_hot_matrix = torch.tensor(one_hot_encoding(voc,tokens[number_batch])).to(torch.int64)
-            
-            for word in range(len(tokens[number_batch])):
-                # zero the parameter gradients
-                optimizer.zero_grad()
-            
-                # forward + backward + optimize
-                outputs = model(one_hot_matrix[word],labels[number_batch])
+            np.append(one_hot_matrix,one_hot_encoding(voc,tokens[number_batch]))
+        
+        print(one_hot_matrix.shape)
+        one_hot_matrix = torch.tensor(one_hot_matrix).to(torch.int64).to(device)
+        labels = labels.to(device)
 
-                print("Après")
-                loss = loss(outputs, labels)
-                print("ok")
-                loss.backward()
-                print("ok")
-                optimizer.step()
-                print("ok")
-            
-                # print statistics
-                running_loss += loss.item()
-                if i % 2000 == 1999:    # print every 2000 mini-batches
-                    print(f'[{epoch + 1}, {i + 1:5d}] loss: {running_loss / 2000:.3f}')
-                    running_loss = 0.0                                                      
+        # zero the parameter gradients
+        optimizer.zero_grad()
+    
+        # forward + backward + optimize
+        outputs = model(one_hot_matrix,labels)
+
+        print("Après")
+        loss = loss(outputs, labels)
+        print("ok")
+        loss.backward()
+        print("ok")
+        optimizer.step()
+        print("ok")
+    
+        # print statistics
+        running_loss += loss.item()
+        if i % 2000 == 1999:    # print every 2000 mini-batches
+            print(f'[{epoch + 1}, {i + 1:5d}] loss: {running_loss / 2000:.3f}')
+            running_loss = 0.0                                                      
             
 #Entrainement terminé
