@@ -41,7 +41,7 @@ test_name = "task_A_En_test.csv"
 
 
 #On défini les paramètres du dataloader
-batch_size = 20
+batch_size = 5
 params = {'batch_size': batch_size,
           'shuffle': True,
           'num_workers': 1}
@@ -150,20 +150,30 @@ class Transformer(nn.Module):
         # 
         self.len_embedding = embed_size
 
-        # Masque pour le transformeur
-        self.mask = nn.Transformer.generate_square_subsequent_mask(max_sequence_length).to(device)
-        
         # On créé la layer de l'embedding
         self.embedding = nn.Embedding(len_vocab+1, embed_size, padding_idx=len_vocab)
 
-        # Positional encoding 
-        self.positional_encoder = PositionalEncoding(embed_size,vocab_size=len_vocab)
-
         # Le transformer
-        self.transformer_encoder = nn.TransformerEncoder(nn.TransformerEncoderLayer(embed_size, nhead), num_layers)
+        self.pos_encoder = PositionalEncoding(
+            d_model=embed_size,
+            dropout=0.01,
+            vocab_size=len_vocab,
+        )
 
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=embed_size,
+            nhead=nhead,
+            dropout=0.01,
+        )
+
+        self.transformer_encoder = nn.TransformerEncoder(
+            encoder_layer,
+            num_layers=num_layers,
+        )
+        
         # La layer fully connected pour déterminer si la phrase est sarcastique ou non
-        self.fc = nn.Linear(embed_size, 32)
+        self.fc = nn.Linear(4480, 512)
+        self.fc1 = nn.Linear(512, 32)
         self.fc2 = nn.Linear(32, 1)
 
 
@@ -171,12 +181,18 @@ class Transformer(nn.Module):
         
         #Pass avant de notre modèle
         x = self.embedding(x) * math.sqrt(self.len_embedding)
-        x = self.positional_encoder(x)
+        x = self.pos_encoder(x)
         x = self.transformer_encoder(x)
-        x = x.mean(dim=0)
+        x = x.permute(1,0,2)
+        # print(x.size())
+        x = x.flatten(1,2)
+        # print(x.size())
         x = self.fc(x)
+        x = torch.relu(x)
+        x = self.fc1(x)
+        x = torch.relu(x)
         x = self.fc2(x)
-        return x
+        return torch.sigmoid(x)
     
 print("--- Création du Transformer basique terminée ---")
 
@@ -187,10 +203,10 @@ def one_hot_encoding(voc, list_Of_Words):
     return matrixToReturn
 
 # Paramètres de notre modèle
-taille_embeddings = 512
+taille_embeddings = 64
 nhead = 8
 num_layers = 6
-n_epoch = 10
+n_epoch = 70
 
 
 # On va optimiser notre modèle
@@ -200,18 +216,23 @@ import torch.optim as optim
 model = Transformer(voc.__len__(),taille_embeddings,nhead,num_layers).to(device)
 
 # On déclare notre loss
-criterion = nn.BCEWithLogitsLoss()
+criterion = nn.BCELoss()
 
 # On se déclare un optimiseur qui effectuera la descente de gradient
-optimizer = optim.Adam(model.parameters())
+optimizer = optim.Adam(model.parameters(), lr=0.05)
 
 # L'historique pour print plus tard
 loss_history, train_accuracy_history, valid_accuracy_history = [], [], []
 
 # On réalise notre nombre d'epochs
+
+epoch_loss = 0
+epoch_accuracy = 0
 for epoch in range(n_epoch):
     
     running_loss = 0
+    correct = 0
+    
     # On loop sur le batch
     for i, (seq, labels) in enumerate(training_generator):
         
@@ -223,16 +244,29 @@ for epoch in range(n_epoch):
     
         # forward + backward + optimize
         outputs = model(sequences)
-
+        # print(np.unique(outputs.detach().numpy().round()))
         loss = criterion(outputs, labels)
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
+        
         optimizer.step()
     
         # print statistics
         running_loss += loss.item()
-        if i % 20 == 19:  
-            print(f'[{epoch + 1}, {i + 1:5d}] loss: {running_loss / 2000:.3f}')
-            running_loss = 0.0                                                      
+        correct += np.sum((outputs.detach().numpy().round() == labels.detach().numpy()))/len(labels.detach().numpy())
+        
+        epoch_loss += loss.item()
+        epoch_accuracy += np.sum((outputs.detach().numpy().round() == labels.detach().numpy()))
+
+        if i % 1000 == 999:  
+            print(f'[{epoch + 1}, {i + 1:5d}] loss: {running_loss / 10:.3f} accuracy: {correct / 10:.3f}')
+            running_loss = 0.0    
+            correct = 0.0     
+            numberofiterations = 0.0  
+
+
+
+    print(f'Epoch {epoch + 1}, global_loss: {epoch_loss / len(y_train):.3f} accuracy: {epoch_accuracy / len(y_train):.3f}')
+    epoch_loss = 0   
+    epoch_accuracy = 0                                  
             
 #Entrainement terminé
