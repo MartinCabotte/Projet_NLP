@@ -15,7 +15,6 @@ import math
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 print('Using {} device'.format(device))
-# device = 'cpu'
 
 class iSarcasmDataset(Dataset):
   def __init__(self, sentence, labels):
@@ -88,10 +87,6 @@ indexed_sequences = [torch.tensor(voc.forward(sequence)) for sequence in tokeniz
 X_train = [torch.cat([sequence,torch.tensor([voc.__len__()]).expand(max_sequence_length- len(sequence))]) for sequence in indexed_sequences]
 y_train = torch.tensor(y_train.values).unsqueeze(1).float()
 
-print(type(X_train))
-print(type(y_train))
-
-
 #On créé notre dataset pyTorch
 train_iSarcasm = iSarcasmDataset(X_train, y_train)
 training_generator = DataLoader(train_iSarcasm, **params)
@@ -120,22 +115,7 @@ for i, (seq, labels) in enumerate(test_generator):
     
 print("--- Chargement des datasets terminé ---")
 
-
-# On créé le vocabulaire
-
-# print("--- Traitement sur notre vocabulaire ---")
-
-# list_of_words = []
-# for phrase in X_train:
-#     list_of_words.extend(phrase.split())
-    
-# list_of_words = np.unique(list_of_words)
-# len_Vocabulary = len(list_of_words)
-
-# print("La longueur du vocabulaire est de : "+str(len_Vocabulary))
-
 print("--- Création du Transformer basique ---")
-
 
 """
 La classe PositionalEncoding est offerte par le tutoriel officiel de PyTorch.
@@ -181,13 +161,13 @@ class Transformer(nn.Module):
 
         # Le transformer
         self.transformer_encoder = nn.TransformerEncoder(nn.TransformerEncoderLayer(embed_size, nhead), num_layers)
-        # self.transformer = nn.Transformer(len_embedding, nhead, num_layers)
 
         # La layer fully connected pour déterminer si la phrase est sarcastique ou non
-        self.fc = nn.Linear(embed_size, 1)
+        self.fc = nn.Linear(embed_size, 32)
+        self.fc2 = nn.Linear(32, 1)
 
 
-    def forward(self, x, label):
+    def forward(self, x):
         
         #Pass avant de notre modèle
         x = self.embedding(x) * math.sqrt(self.len_embedding)
@@ -195,6 +175,7 @@ class Transformer(nn.Module):
         x = self.transformer_encoder(x)
         x = x.mean(dim=0)
         x = self.fc(x)
+        x = self.fc2(x)
         return x
     
 print("--- Création du Transformer basique terminée ---")
@@ -206,9 +187,9 @@ def one_hot_encoding(voc, list_Of_Words):
     return matrixToReturn
 
 # Paramètres de notre modèle
-taille_embeddings = 100
-nhead = 2
-num_layers = 3
+taille_embeddings = 512
+nhead = 8
+num_layers = 6
 n_epoch = 10
 
 
@@ -217,8 +198,6 @@ import torch.optim as optim
 
 # On déclare notre modèle
 model = Transformer(voc.__len__(),taille_embeddings,nhead,num_layers).to(device)
-# print(voc.__len__())
-# print(len_Vocabulary)
 
 # On déclare notre loss
 criterion = nn.BCEWithLogitsLoss()
@@ -243,8 +222,7 @@ for epoch in range(n_epoch):
         optimizer.zero_grad()
     
         # forward + backward + optimize
-        outputs = model(sequences,labels)
-        # print(outputs)
+        outputs = model(sequences)
 
         loss = criterion(outputs, labels)
         loss.backward()
@@ -253,7 +231,7 @@ for epoch in range(n_epoch):
     
         # print statistics
         running_loss += loss.item()
-        if i % 20 == 19:    # print every 2000 mini-batches
+        if i % 20 == 19:  
             print(f'[{epoch + 1}, {i + 1:5d}] loss: {running_loss / 2000:.3f}')
             running_loss = 0.0                                                      
             
