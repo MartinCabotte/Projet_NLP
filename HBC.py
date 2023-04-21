@@ -1,17 +1,11 @@
-from transformers import AutoTokenizer, DistilBertModel, logging
-import numpy as np
-import evaluate
-import torch
-from torch import nn
-from transformers import logging
+from transformers import AutoTokenizer, logging, DistilBertModel, RobertaModel
 import numpy as np
 import pandas as pd
-from torch.utils.data import DataLoader, Dataset, TensorDataset, RandomSampler
-from torch import optim
-import torch.nn.functional as Ftrain_iSarcasm
+import torch
+from torch import nn, optim
+from torch.utils.data import DataLoader, TensorDataset
+from torchmetrics.classification import BinaryAccuracy, BinaryF1Score
 from tqdm import tqdm
-import math
-import torch.optim as optim
 import os
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -20,20 +14,6 @@ logging.set_verbosity_error()
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 print('Using {} device'.format(device))
-
-class iSarcasmDataset(Dataset):
-  def __init__(self, sentence, labels):
-        self.sentence = sentence
-        self.labels = labels
-
-  def __len__(self):
-        return len(self.sentence)
-
-  def __getitem__(self, index):
-        x = self.sentence[index]
-        y = self.labels[index]
-
-        return x, y
 
 
 print("--- Chargement des datasets ---")
@@ -108,15 +88,21 @@ panda_Test = pd.read_csv(directory+test_name, index_col=[0])
 X_test = panda_Test.index
 y_test = panda_Test['sarcastic']
 
+X_test = tokenizer(X_test.to_list(), return_tensors="pt", padding=True, truncation=True, max_length=128)
+
+test_inputs = X_test['input_ids']
+test_masks  = X_test['attention_mask']
+test_labels = torch.tensor(np.asarray(y_test))
+
 #On créé notre dataset pyTorch
-test_iSarcasm = iSarcasmDataset(X_test, y_test)
+test_iSarcasm = TensorDataset(test_inputs,test_masks,test_labels)
 test_generator = DataLoader(test_iSarcasm, **params)
 
 #On regarde que tout soit bien chargé
-for i, (seq, labels) in enumerate(test_generator):
+for i, batch in enumerate(test_generator):
     if i > 0:
         break
-    print("Batch size : "+str(len(seq)))
+    print("Batch size : "+str(len(batch[0])))
     
 print("--- Chargement des datasets terminé ---")
 
@@ -125,7 +111,7 @@ class HeuristicBertClassifier(nn.Module):
     def __init__(self):
         super(HeuristicBertClassifier, self).__init__()
 
-        self.bert = DistilBertModel.from_pretrained("distilbert-base-uncased")
+        self.bert = RobertaModel.from_pretrained("roberta-base")
         self.tronc = nn.Sequential(
             nn.Linear(768, 512),
             nn.ReLU(),
@@ -136,15 +122,28 @@ class HeuristicBertClassifier(nn.Module):
         self.s = nn.Linear(70,1)
 
     def forward(self, text, mask):
-        x = self.bert(input_ids=text, attention_mask=mask, output_attentions=False, output_hidden_states=False).last_hidden_state
-        x = torch.mean(x, axis=1).squeeze() # Mean pooling tokens
+        x = self.bert(input_ids=text, attention_mask=mask, output_attentions=False, output_hidden_states=False).last_hidden_state[:,0,:] # [CLS]
         x = self.tronc(x)
         h = self.h(x)
         x = self.s(torch.cat((x,h),dim=1))
         return x, h
     
-    def predict(self, x):
-        x, _ = self.forward(x)
+class SimpleBertClassifier(nn.Module):
+    def __init__(self):
+        super(HeuristicBertClassifier, self).__init__()
+
+        self.bert = DistilBertModel.from_pretrained("distilbert-base-uncased")
+        self.tronc = nn.Sequential(
+            nn.Linear(768, 512),
+            nn.ReLU(),
+            nn.Linear(512, 64),
+            nn.ReLU(),
+            nn.Linear(64, 1)
+        )
+
+    def forward(self, text, mask):
+        x = self.bert(input_ids=text, attention_mask=mask, output_attentions=False, output_hidden_states=False).last_hidden_state[:,0,:] # [CLS]
+        x = self.tronc(x)
         return x
     
 
@@ -158,11 +157,11 @@ import torch.optim as optim
 criterion = nn.BCEWithLogitsLoss()
 
 # On se déclare un optimiseur qui effectuera la descente de gradient
-optimizer = optim.Adam(model.parameters())
+optimizer = optim.Adam(model.parameters(), lr=1e-5)
 
 # L'historique pour print plus tard
 loss_history, train_accuracy_history, valid_accuracy_history = [], [], []
-n_epoch = 1
+n_epoch = 3
 
 # On réalise notre nombre d'epochs
 for epoch in range(n_epoch):
@@ -182,7 +181,9 @@ for epoch in range(n_epoch):
         # forward + backward + optimize
         out_sarcastic, out_categories = model(sequences, masks)
 
-        loss = criterion(out_sarcastic, sarcastic) + criterion(out_categories, categories)
+        loss = criterion(out_sarcastic, sarcastic) 
+        if not torch.isnan(categories).any():
+            loss += criterion(out_categories, categories)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
         optimizer.step()
@@ -190,8 +191,42 @@ for epoch in range(n_epoch):
         # print statistics
         running_loss += loss.item()
         if i % 20 == 19:  
-            print(f'[{epoch + 1}, {i + 1:5d}] loss: {running_loss / 2000:.3f}')
-            running_loss = 0.0                                                      
+            print(f'[{epoch + 1}, {i + 1:5d}] loss: {running_loss / 20:.3f}')
+            running_loss = 0.0                                              
             
-#Entrainement terminé
+print("--- Entrainement terminé ---")
+
+print("--- Phase de test ---")
+
+preds = []
+truth = []
+
+with torch.no_grad():
+    for i, batch in enumerate(test_generator):
+            
+        batch = (i.to(device) for i in batch)
+        sequences, masks, labels = batch
+
+        # forward + backward + optimize
+        out_sarcastic, _ = model(sequences, masks)
+
+        # collect predictions and labels
+        preds.append(out_sarcastic.cpu())
+        truth.append(labels.cpu())
+
+preds = torch.cat(preds, dim=0).squeeze()
+truth = torch.cat(truth, dim=0).squeeze()
+
+acc = BinaryAccuracy()
+f1 = BinaryF1Score()
+
+accuracy = acc(preds,truth)
+f1score = f1(preds,truth)
+
+print(f'Final Accuracy: {accuracy}')
+print(f'Final F1-Score: {f1score}')
+
+
+
+
 
